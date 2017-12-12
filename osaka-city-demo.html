@@ -1,0 +1,463 @@
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>大阪市各区のデータ比較サンプル</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/leaflet.css" />
+
+<style type="text/css">
+body {margin:0px;padding:0px;}
+/* 凡例のスタイル */
+.legend {
+    line-height: 18px;
+    color: #555;
+    background-color: white;
+    padding: 10;
+    border-radius: 10px;
+}
+.legend i {
+    width: 18px;
+    height: 18px;
+    float: left;
+    margin-right: 8px;
+    opacity: 0.7;
+}
+</style>
+</head>
+<body>
+
+<div id="map" style="width:100%; height:100%"></div>
+
+<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/jquery/2.2.4/jquery.min.js"></script>
+
+<script type="text/javascript" src="jquery-ajaxQueue/dist/jquery.ajaxQueue.min.js"></script>
+<script src='Wicket/wicket.js'></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/leaflet.js"></script>
+<script src="https://d3js.org/d3.v3.js"></script>
+<script type="text/javascript" src="Leaflet.D3SvgOverlay/L.D3SvgOverlay.js"></script>
+<script src="spin.min.js"></script>
+<script src="Leaflet.Spin/leaflet.spin.js"></script>
+
+<script src="http://uedayou.net/SPARQLTimeliner/js_sparql/sparql.js"></script>
+
+<script>
+
+//
+// leaflet-simple-sparql
+//
+
+var endpoint = "https://uedayou.net/isillod/sparql";
+var query = (function () {/*
+PREFIX geo: <http://www.w3.org/2003/01/geo/wgs84_pos#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+select distinct ?uri ?title ?isil_id ?lat ?long ?areauri ?region ?locality ?street ?postal where {
+?uri <http://dbpedia.org/ontology/originalName> ?title;
+<http://www.w3.org/ns/org#classification> ?class;
+<http://www.w3.org/ns/org#hasSite> ?hs.
+?hs <http://www.w3.org/ns/org#siteAddress> ?addr;
+<http://www.w3.org/2003/01/geo/wgs84_pos#long> ?long;
+<http://www.w3.org/2003/01/geo/wgs84_pos#lat> ?lat.
+?addr <http://schema.org/areaServed> ?areauri;
+<http://schema.org/addressRegion> ?region;
+<http://schema.org/addressLocality> ?locality;
+<http://schema.org/streetAddress> ?street;
+<http://schema.org/postalCode> ?postal.
+filter(xsd:float(?lat) > 34.583901 && xsd:float(?long) > 135.360587 
+&& xsd:float(?lat) < 34.752596  && xsd:float(?long) < 135.600226)
+}
+*/}).toString().match(/\n([\s\S]*)\n/)[1];
+
+var labelColumn = "title";
+var labelLatitude = "lat";
+var labelLongitude = "long";
+
+
+//
+// loaviz
+//
+
+// GeoJSONを利用するかどうか
+var geojson_flag = false;
+var geojson_name = "takatsuki.json";
+
+// データラベル
+var data_label = "人口（人）";
+
+// 各区のデータ
+var data = (function () {/*uri	人口（人）
+大阪府大阪市北区	127397 
+大阪府大阪市都島区	106083 
+大阪府大阪市福島区	73839 
+大阪府大阪市此花区	66317 
+大阪府大阪市中央区	95766 
+大阪府大阪市西区	96532 
+大阪府大阪市港区	81210 
+大阪府大阪市大正区	64459 
+大阪府大阪市天王寺区	77790 
+大阪府大阪市浪速区	71668 
+大阪府大阪市西淀川区	95323 
+大阪府大阪市淀川区	178330 
+大阪府大阪市東淀川区	175552 
+大阪府大阪市東成区	81324 
+大阪府大阪市生野区	129360 
+大阪府大阪市旭区	91037 
+大阪府大阪市城東区	165833 
+大阪府大阪市鶴見区	111539 
+大阪府大阪市阿倍野区	108367 
+大阪府大阪市住之江区	121979 
+大阪府大阪市住吉区	153199 
+大阪府大阪市東住吉区	126077 
+大阪府大阪市平野区	195118 
+大阪府大阪市西成区	110458 
+*/}).toString().match(/[^]*\/\*([^]*)\*\/\}$/)[1];
+
+var data = d3.tsv.parse(data);
+
+// データの階級区分
+var data_grades = [ 
+0,
+50000, 
+75000, 
+100000,
+125000,
+150000,
+175000
+];
+
+
+// データに応じて塗りつぶし色を変更
+function getColor(d) {
+	return d > data_grades[6]  ? '#800026' :
+	d > data_grades[5]  ? '#BD0026' :
+	d > data_grades[4]  ? '#E31A1C' :
+	d > data_grades[3]  ? '#FC4E2A' :
+	d > data_grades[2]  ? '#FD8D3C' :
+	d > data_grades[1]  ? '#FEB24C' :
+	d > data_grades[0]  ? '#FED976' :
+			  '#FFEDA0' ;
+}
+
+// データの最小値を取得(使ってない)
+var min = d3.min(data, function (e) {
+    return e[data_label];
+});
+
+// データの最大値を取得(使ってない)
+var max = d3.max(data, function (e) {
+    return e[data_label];
+});
+
+
+// Leafletによる地図表示
+var map = L.map('map').setView([34.672801, 135.499760],12);
+var tiles = L.tileLayer('http://tile.openstreetmap.jp/{z}/{x}/{y}.png', {
+maxZoom: 18,
+attribution: '&copy; <a href="http://osm.org/copyright">OpenStreetMap</a> contributors | <a href="http://uedayou.net/loa/">住所LOD</a>, <a href="http://www.ndl.go.jp/jp/aboutus/standards/opendataset.html#ISIL_trial">ISIL-LOD</a>'
+});
+map.addLayer(tiles);
+
+
+// 凡例
+var legend = L.control({position: 'bottomright'});
+legend.onAdd = function (map) {
+    var div = L.DomUtil.create('div', 'info legend'),
+        //grades = [53, 55, 57, 59, 61, 63, 65, 70],
+        grades = data_grades,
+        labels = [];
+    for (var i = 0; i < grades.length; i++) {
+        div.innerHTML +=
+            '<i style="background:' + getColor(grades[i] + 1) + '"></i> ' +
+            grades[i] + (grades[i + 1] ? '&ndash;' + grades[i + 1] + '<br>' : '+');
+    }
+    return div;
+};
+legend.addTo(map);
+
+console.log("start loading.");
+map.spin(true);
+$.each(data, function(i,d){
+	if (d.uri.lastIndexOf('http://uedayou.net/loa/', 0) !== 0) {
+		d.uri = 'http://uedayou.net/loa/'+d.uri;
+	}
+	if(!geojson_flag){loadPolygonFromLOAJ(d.uri, data[i]);}
+});
+if(geojson_flag){loadPolygonFromGeoJson(data);}
+
+
+/*** SPARQL処理のコメントアウト
+//
+// leaflet-simple-sparql
+//
+qr = sendQuery(endpoint, query);
+qr.fail(
+    function (xhr, textStatus, thrownError) {
+        alert("Error: A '" + textStatus+ "' occurred.");
+    }
+);
+qr.done(
+    function (json) {
+        var dataJson = [];
+        for(var i=0;i<json.results.bindings.length;i++) {
+            dataJson.push(_convSparqlJsonToGeoJson(json.results.bindings[i]));
+        }
+        L.geoJson(dataJson, {
+//            pointToLayer: function(feature, latlng) {
+//                var smallIcon = new L.Icon({
+//                    iconSize: [32, 37],
+//                    iconAnchor: [16, 37],
+//                    popupAnchor:  [1, -34],
+//                    iconUrl: 'library.png'
+//                });
+//                return L.marker(latlng, {icon: smallIcon});
+//            },
+            onEachFeature: function (feature, layer) {
+                if ("title" in feature.properties) { layer.bindPopup(feature.properties["title"]);}
+        }}).addTo(map);
+    }
+);
+
+// leaflet-simple-sparql
+_convSparqlJsonToGeoJson = function(data) {
+    var json = {};
+    json["type"] = "Feature";
+    json["properties"] = _getProperties(data);
+    json["geometry"] = {"type" :"Point"};
+    json["geometry"]["coordinates"] = [data[labelLongitude].value, data[labelLatitude].value];
+    return json;
+}
+
+// leaflet-simple-sparql
+_getProperties = function(data) {
+    var props = {};
+    $.each(data, function(key, value) {
+        props[key] = value.value;
+    });
+    return props;
+}
+***/
+
+
+// loaviz geojson
+function loadPolygonFromGeoJson(data) {
+    $.ajax({
+        type: 'GET',
+        url: geojson_name,
+        dataType: 'json',
+        success: function(json){
+            $.each(json.features, function(key, value) {
+                var match = $.grep(data, function(v, i){ return v.uri == value.properties.uri; });
+                value.properties[data_label] = match.length>0?match[0][data_label]:-1; 
+                var importance = [];
+                if (value.geometry.type == "MultiPolygon") {
+                    var mx = 0;
+                    $.each(value.geometry.coordinates, function(i,_d){
+                        var area = polygonArea(_d[0],_d[0].length);
+                        if (mx<area) {
+                            importance = _d[0];
+                            mx = area;
+                        }
+                    });
+                } else { importance = value.geometry.coordinates[0]; }
+                value["internal"] = {"center":getCentroid2(importance)};
+            });
+            // tooltip
+            var TooltipMarker = '';
+
+            // leaflet.D3SvgOverlay
+            // https://github.com/teralytics/Leaflet.D3SvgOverlay
+            var d3Layer = L.d3SvgOverlay(function(sel, proj) {
+                var upd = sel.selectAll('path').data(json.features);
+                upd.enter()
+                .append('path')
+                .attr('d', proj.pathFromGeojson)
+                .attr('stroke', 'black')
+                .attr('fill', function(d){
+                    // データに応じて塗りつぶし色を変更
+                    console.log(d.properties);
+                    return getColor(d.properties[data_label]);
+                })
+                .attr('fill-opacity', '0.8');
+                upd.attr('stroke-width', 1 / proj.scale);
+                upd.on('mouseover', function(d) {
+                    var Lati = d.internal.center[1];
+                    var Longi = d.internal.center[0];
+
+                    if (!isFinite(Lati)||!isFinite(Longi)) return;
+
+                    var markerIcon = L.icon({
+                        iconUrl: 'Empty_Icon.png',
+                        iconSize: [38, 95],
+                        shadowSize: [50, 64],
+                        iconAnchor: [Lati, Longi],
+                    });
+
+                    TooltipMarker = new L.Marker([Lati, Longi], {
+                        icon: markerIcon
+                    });
+                    map.addLayer(TooltipMarker);
+
+                    var out =[];
+                    for(var key in d.properties){
+                        if (key!="uri") {
+                            //out.push("<strong>"+key+"</strong>: "+d.properties[key]);
+                            var val = d.properties[key]==-1?"値なし":d.properties[key];
+                            out.push("<strong>"+key+"</strong>: "+val);
+                        }
+                    }
+                    TooltipMarker.bindPopup(out.join("<br/>"));
+                    TooltipMarker.openPopup();
+                })
+                .on('mouseout', function(d) {
+                    if (TooltipMarker != '') map.removeLayer(TooltipMarker);
+                });
+            });
+            //
+
+            map.addLayer(d3Layer);
+            console.log("finished loading.");
+            map.spin(false);
+        }
+    });
+}
+
+// loaviz direct
+function loadPolygonFromLOAJ(uri, option) {
+	var url = window.location.protocol=="https:"?uri.replace(/^http:/i,"https:"):uri;
+	$.ajaxQueue({
+	    url: url+".json"
+	}).done(function( json ) {
+		//console.log(uri);
+		var json = json[uri];
+		if ("http://www.opengis.net/ont/geosparql#wktLiteral" in json) ; else return;
+		var label = json["http://www.w3.org/2000/01/rdf-schema#label"][0]["value"];
+		var wkt = json["http://www.opengis.net/ont/geosparql#wktLiteral"][0]["value"];
+		var _geoArray = new Array();
+		var _o = new Object();
+		_o["type"] = "Feature";
+		wicket = new Wkt.Wkt();
+		wicket.read(wkt);
+		var obj = wicket.toJson();
+		_o["geometry"] = obj;
+		_o["properties"] = {};
+		_o["properties"]["name"] = label;
+		_o["properties"][data_label] = option[data_label];
+		var importance = [];
+		if (obj.type == "MultiPolygon") {
+			var mx = 0;
+			$.each(obj.coordinates, function(i,_d){
+				var area = polygonArea(_d[0],_d[0].length);
+				if (mx<area) {
+					importance = _d[0];
+					mx = area;
+				}
+			});
+		}
+		else importance = obj.coordinates[0];
+		_o["internal"] = {"center":getCentroid2(importance)};
+		_geoArray[0] = _o;
+
+		// tooltip
+		var TooltipMarker = '';
+
+		// leaflet.D3SvgOverlay
+		// https://github.com/teralytics/Leaflet.D3SvgOverlay
+		var d3Layer = L.d3SvgOverlay(function(sel, proj) {
+			var upd = sel.selectAll('path').data(_geoArray);
+			upd.enter()
+		    .append('path')
+		    .attr('d', proj.pathFromGeojson)
+		    .attr('stroke', 'black')
+		    .attr('fill', function(){
+		    	//var color = d3.interpolate("khaki", "red");
+		    	//return color((option[data_label]-min)/(max-min))
+		    	
+		    	// データに応じて塗りつぶし色を変更
+			    return getColor(option[data_label]);
+			})
+		    .attr('fill-opacity', '0.8');
+			upd.attr('stroke-width', 1 / proj.scale);
+			upd.on('mouseover', function(d) {
+          		var Lati = d.internal.center[1];
+          		var Longi = d.internal.center[0];
+
+          		if (!isFinite(Lati)||!isFinite(Longi)) return;
+
+		        var markerIcon = L.icon({
+		            iconUrl: 'Empty_Icon.png',
+		            iconSize: [38, 95],
+		            shadowSize: [50, 64],
+		            iconAnchor: [Lati, Longi],
+		        });
+
+		        TooltipMarker = new L.Marker([Lati, Longi], {
+		            icon: markerIcon
+		        });
+		        map.addLayer(TooltipMarker);
+
+				var out =[];
+				for(var key in d.properties){
+					out.push("<strong>"+key+"</strong>: "+d.properties[key]);
+				}
+		        TooltipMarker.bindPopup(out.join("<br/>"));
+		        TooltipMarker.openPopup();
+	        })
+			.on('mouseout', function(d) {
+				if (TooltipMarker != '') map.removeLayer(TooltipMarker);
+	        });
+		});
+		//
+
+		map.addLayer(d3Layer);
+		if (data[data.length-1].uri == uri) {
+			console.log("finished loading.");
+			map.spin(false);
+		}
+	});
+}
+
+// http://stackoverflow.com/questions/22796520/finding-the-center-of-leaflet-polygon
+var getCentroid2 = function (arr) {
+    var twoTimesSignedArea = 0;
+    var cxTimes6SignedArea = 0;
+    var cyTimes6SignedArea = 0;
+
+    var length = arr.length
+
+    var x = function (i) { return parseFloat(arr[i % length][0]) };
+    var y = function (i) { return parseFloat(arr[i % length][1]) };
+
+    for ( var i = 0; i < arr.length; i++) {
+        var twoSA = x(i)*y(i+1) - x(i+1)*y(i);
+        twoTimesSignedArea += twoSA;
+        cxTimes6SignedArea += (x(i) + x(i+1)) * twoSA;
+        cyTimes6SignedArea += (y(i) + y(i+1)) * twoSA;
+    }
+    var sixSignedArea = 3 * twoTimesSignedArea;
+    return [ cxTimes6SignedArea / sixSignedArea, cyTimes6SignedArea / sixSignedArea];        
+}
+
+function polygonArea(coord, numPoints) { 
+  area = 0;
+  j = numPoints-1;
+  for (i=0; i<numPoints; i++){
+  	area = area +  (coord[j][0]+coord[i][0]) * (coord[j][1]-coord[i][1]); 
+    j = i;
+  }
+  return area/2;
+}
+
+</script>
+
+<script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-45357765-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+</body>
+</html>
